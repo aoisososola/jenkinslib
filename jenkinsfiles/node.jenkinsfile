@@ -1,0 +1,105 @@
+#!groovy
+
+@Library('jenkinslibrary@master') _
+
+//func from shareibrary
+def tools = new org.devops.tools()
+
+
+//pipeline
+pipeline{
+    agent{
+        kubernetes{
+            label "jnlp"
+            cloud 'kubernetes'
+            yaml '''
+---
+kind: Pod
+apiVersion: v1
+metadata:
+  name: jnlp
+  namespace: tools
+spec:
+  activeDeadlineSeconds: 3600
+  restartPolicy: Never
+  serviceAccount: jenkins
+  nodeSelector:
+    jenkins: slave
+  containers:
+  - name: jnlp
+    image: registry-docker-dajia.g2work.com/public/dajia-alpine-ci-maven-node:14.7.0
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 1000Mi
+      limits:
+        cpu: 2000m
+        memory: 6000Mi
+    securityContext:
+      privileged: true
+    tty: true
+    hostAliases:
+    - hostnames:
+      - registry-docker-dajia.g2work.com
+      ip: 192.168.1.140
+    - hostnames:
+      - git.g2work.com
+      ip: 192.168.1.140
+    - hostnames:
+      - jira.g2work.com
+      ip: 192.168.1.140
+'''
+        }
+    }
+
+    stages{
+
+        stage('获取代码') {
+            steps {
+                script{
+                    timestamps {
+                    tools.PrintMes("获取代码","green")
+                    git credentialsId: 'sxs-git-id', url: 'https://git.g2work.com/scm/dajia/dajia-security.git'
+                    }
+                }
+            }
+        }
+        stage('构建node项目') {
+            steps {
+                timestamps {
+                tools.PrintMes("构建node项目","green")
+                sh '''                
+                #!/bin/bash
+                echo $WORKSPACE
+                find $WORKSPACE -name package.json >/tmp/list.1
+                cat /tmp/list.1 |awk -F "package.json" \'{ print $1 }\' >/tmp/list.2
+
+                for WEBDIR in `cat /tmp/list.2`
+                do
+                  cd $WEBDIR
+                    pwd
+                  npm config set sass_binary_site https://npm.taobao.org/mirrors/node-sass/
+                  npm config set chromedriver_cdnurl https://npm.taobao.org/mirrors/chromedriver/
+                  npm config set phantomjs_cdnurl https://npm.taobao.org/mirrors/phantomjs/
+                  npm install --registry=http://nexus.g2work.com/repository/dajia-npm-group/
+                  npm run build:dll
+                  npm run build
+                done
+                find $WORKSPACE -name \'*.zip\'
+                '''
+                }
+            }
+        }
+        stage("归档成品"){
+            steps{
+              script{
+                timestamps {
+                tools.PrintMes("归档成品","green")
+                archiveArtifacts artifacts: '**/dist/html/vue.zip', followSymlinks: false
+                }
+              }
+          }
+        }
+    }
+}
