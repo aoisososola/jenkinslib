@@ -1,0 +1,124 @@
+#!groovy
+
+@Library('jenkinslibrary@master') _
+
+//func from shareibrary
+def tools = new org.devops.tools()
+
+
+//pipeline
+pipeline{
+    agent{
+        kubernetes{
+            label "jnlp"
+            cloud 'kubernetes'
+            yaml '''
+---
+kind: Pod
+apiVersion: v1
+metadata:
+  name: jnlp
+  namespace: tools
+spec:
+  activeDeadlineSeconds: 3600
+  restartPolicy: Never
+  serviceAccount: jenkins
+  nodeSelector:
+    jenkins: slave
+  containers:
+  - name: jnlp
+    image: registry-docker-dajia.g2work.com/public/dajia-alpine-ci-maven-node:14.7.0
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 1000Mi
+      limits:
+        cpu: 2000m
+        memory: 6000Mi
+    securityContext:
+      privileged: true
+    tty: true
+    hostAliases:
+    - hostnames:
+      - registry-docker-dajia.g2work.com
+      ip: 192.168.1.140
+    - hostnames:
+      - git.g2work.com
+      ip: 192.168.1.140
+    - hostnames:
+      - jira.g2work.com
+      ip: 192.168.1.140
+'''
+        }
+    }
+
+    stages{
+
+        stage('获取代码') {
+            steps {
+                script{
+                    tools.PrintMes("获取代码","green")
+                    git credentialsId: 'sxs-git-id', url: 'https://git.g2work.com/scm/dajia/dajia-coupon-platform.git'
+                }
+            }
+        }
+        stage('M3打包java项目') {
+            steps {
+                script{
+                    tools.PrintMes("构建node项目","green")
+                    sh 'mvn clean -U deploy -Dmaven.test.skip=true'
+                }
+            }
+        }
+        stage("构建镜像&推送仓库"){
+            steps{
+                script{
+                    tools.PrintMes("构建镜像&推送仓库","green")
+                    sh '''
+					#!/bin/bash
+					set -e
+
+					appName="store-coupon-platform-consumer"
+					targetDir="${WORKSPACE}/dajia-coupon-platform-consumer/target/"
+					version="1.${BUILD_NUMBER}"
+
+					mkdir -p /root/.docker
+					rm -rf /root/.docker/config.json
+					tee /root/.docker/config.json <<-\'EOF\'
+					{
+						"auths": {
+							"registry-docker-dajia.g2work.com": {
+								"auth": "YWRtaW46YWRtaW4xMjM="
+							}
+						}
+					}
+					EOF
+
+					rm -rf ${targetDir}/Dockerfile
+
+					tee ${targetDir}/Dockerfile <<-\'EOF\'
+
+					FROM registry-docker-dajia.g2work.com/public/dajia-alpine-tomcat8:3.12.9
+					ARG GIT_BRANCH="0000000"
+					ARG GIT_COMMIT="0000000"
+					ENV HUI_BRANCH=${GIT_BRANCH}
+					ENV HUI_VERSION=${GIT_COMMIT}
+					# 添加工程目录ROOT
+					COPY ROOT /root/tomcat/deploy/ROOT/
+					CMD ["catalina.sh", "run"]
+					EOF
+
+					cd ${targetDir}
+					appName=${appName}
+					namespaceAndName=${appName/-//}
+					echo "GIT_COMMIT=${GIT_COMMIT}"
+					echo "GIT_BRANCH=${GIT_BRANCH}"
+					buildah bud --format=docker --tls-verify=true -t registry-docker-dajia.g2work.com/${namespaceAndName}:${version} --build-arg GIT_COMMIT=$GIT_COMMIT --build-arg GIT_BRANCH=$GIT_BRANCH .
+					buildah push registry-docker-dajia.g2work.com/${namespaceAndName}:${version}
+					'''
+                }
+            }
+        }
+    }
+}
