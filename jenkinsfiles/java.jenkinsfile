@@ -66,7 +66,7 @@ spec:
         stage('M3打包java项目') {
             steps {
                 script{
-                    tools.PrintMes("构建node项目","green")
+                    tools.PrintMes("M3打包java项目","green")
                     sh 'mvn clean -U deploy -Dmaven.test.skip=true'
                 }
             }
